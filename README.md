@@ -6,7 +6,7 @@ Put the server running on your machine on a public URL, with one command.
 $ portlift
 node · 5173 · C:\code\myapp
 https://random-words.trycloudflare.com
-r: QR code · Ctrl+C: stop
+c: copy URL · r: QR code · Ctrl+C: stop
 ```
 
 Open the URL on your phone, or send it to someone. It works from any network
@@ -36,7 +36,8 @@ portlift <url>      expose a specific local URL
 -q, --quiet         print only the URL
 ```
 
-While the tunnel is up, press `r` to show a QR code for the URL.
+While the tunnel is up, press `c` to copy the URL to the clipboard, or `r` to
+show a QR code for it.
 
 With `-q`, or when the output is piped, portlift prints the URL and nothing
 else, and never reads the keyboard or asks a question:

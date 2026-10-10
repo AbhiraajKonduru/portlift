@@ -36,6 +36,11 @@ Flags:
   -q, --quiet     print only the URL
   -v, --version   print the version
   -h, --help      show this help
+
+Keys while the tunnel is up:
+  c               copy the URL to the clipboard
+  r               show a QR code for the URL
+  Ctrl+C          stop
 `
 
 // errQuit means the user backed out; there is nothing more to report.
@@ -166,6 +171,7 @@ func serve(ctx context.Context, opts options, interactive bool) error {
 		if !opts.qr {
 			hint = "r: QR code · " + hint
 		}
+		hint = "c: copy URL · " + hint
 		go func() {
 			buf := make([]byte, 1)
 			for {
@@ -181,12 +187,29 @@ func serve(ctx context.Context, opts options, interactive bool) error {
 	}
 
 	fmt.Fprintf(out, "%s\n%s\n", tunnel.URL, hint)
+
+	// A note is a one-line message that the next note overwrites in place,
+	// so pressing a key repeatedly does not scroll the URL away.
+	noteLen := -1 // length of the note the cursor is sitting after, or -1
+	note := func(msg string) {
+		fmt.Fprintf(out, "\r%s%s", msg, strings.Repeat(" ", max(0, noteLen-len(msg))))
+		noteLen = len(msg)
+	}
+	endNote := func() {
+		if noteLen >= 0 {
+			fmt.Fprintln(out)
+			noteLen = -1
+		}
+	}
+	defer endNote()
+
 	qrShown := false
 	showQR := func() {
 		if qrShown {
 			return
 		}
 		qrShown = true
+		endNote()
 		fmt.Fprintln(out)
 		qrterminal.GenerateHalfBlock(tunnel.URL, qrterminal.L, out)
 	}
@@ -205,6 +228,12 @@ func serve(ctx context.Context, opts options, interactive bool) error {
 			switch key {
 			case 'r', 'R':
 				showQR()
+			case 'c', 'C':
+				if err := copyToClipboard(tunnel.URL); err != nil {
+					note("couldn't copy the URL: " + err.Error())
+				} else {
+					note("copied to clipboard")
+				}
 			case ctrlC:
 				return nil
 			}
