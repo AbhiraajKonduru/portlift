@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	gnet "github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
@@ -98,17 +99,25 @@ func Find(ctx context.Context) (Result, error) {
 			if cut, ok := strings.CutSuffix(strings.ToLower(name), ".exe"); ok {
 				name = name[:len(cut)]
 			}
+			// Probe this process's ports together. Once one answers, the rest
+			// get only a short grace before they are given up on.
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			var answered sync.Once
+			var probes sync.WaitGroup
 			for _, port := range pidPorts {
-				wg.Go(func() {
+				probes.Go(func() {
 					url, ok := Probe(ctx, port)
 					if !ok {
 						return
 					}
+					answered.Do(func() { time.AfterFunc(siblingGrace, cancel) })
 					mu.Lock()
 					res.Servers = append(res.Servers, Server{Port: port, Name: name, Dir: dir, Tier: tier, URL: url})
 					mu.Unlock()
 				})
 			}
+			probes.Wait()
 		})
 	}
 	wg.Wait()

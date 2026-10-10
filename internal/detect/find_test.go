@@ -9,13 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
+	"time"
 )
 
 // The test binary doubles as a dev server: when serveEnv is set it serves
-// HTTP on a free loopback port, prints the port and waits to be killed.
+// HTTP on a free loopback port, prints its ports and waits to be killed.
 const serveEnv = "PORTLIFT_TEST_SERVE"
 
 func TestMain(m *testing.M) {
@@ -27,13 +26,27 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Println(ln.Addr().(*net.TCPAddr).Port)
+	// Like a Next.js dev server, also hold open a port that accepts
+	// connections and never answers them.
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	go func() {
+		for {
+			if _, err := silent.Accept(); err != nil {
+				return
+			}
+		}
+	}()
+	fmt.Println(ln.Addr().(*net.TCPAddr).Port, silent.Addr().(*net.TCPAddr).Port)
 	http.Serve(ln, http.NotFoundHandler())
 }
 
 // startServer runs a server process whose working folder is dir and returns
-// the port it listens on.
-func startServer(t *testing.T, dir string) int {
+// the port it serves HTTP on and the port it merely holds open.
+func startServer(t *testing.T, dir string) (port, silent int) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0])
 	cmd.Dir = dir
@@ -53,11 +66,10 @@ func startServer(t *testing.T, dir string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	port, err := strconv.Atoi(strings.TrimSpace(line))
-	if err != nil {
+	if _, err := fmt.Sscan(line, &port, &silent); err != nil {
 		t.Fatal(err)
 	}
-	return port
+	return port, silent
 }
 
 func find(t *testing.T) map[int]Server {
@@ -84,13 +96,24 @@ func TestFindScopesByFolder(t *testing.T) {
 		mustMkdir(t, dir)
 	}
 
-	webPort := startServer(t, web)
-	apiPort := startServer(t, api)
-	otherPort := startServer(t, other)
+	webPort, webSilent := startServer(t, web)
+	apiPort, apiSilent := startServer(t, api)
+	otherPort, _ := startServer(t, other)
 
 	t.Run("from the server's own folder", func(t *testing.T) {
 		t.Chdir(web)
+		began := time.Now()
 		got := find(t)
+		// Each process's HTTP port answers at once, so its silent port should
+		// only be waited on for the short grace, not the full reply timeout.
+		if took := time.Since(began); took > replyTimeout {
+			t.Errorf("Find took %s; a port that never answers should not hold it up", took)
+		}
+		for name, port := range map[string]int{"web": webSilent, "api": apiSilent} {
+			if _, ok := got[port]; ok {
+				t.Errorf("the %s server's silent port was reported as a server", name)
+			}
+		}
 		if s, ok := got[webPort]; !ok || s.Tier != TierBelow {
 			t.Errorf("web server: found=%v tier=%d, want TierBelow", ok, s.Tier)
 		} else {
