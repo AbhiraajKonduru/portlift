@@ -19,10 +19,10 @@ have it, and telling you when your dev server is going to reject the tunnel.
 
 ## Install
 
-From a clone of this repo:
+With [Go](https://go.dev/dl/) installed:
 
 ```
-go install .
+go install github.com/AbhiraajKonduru/portlift@latest
 ```
 
 ## Usage
@@ -91,4 +91,11 @@ using it.
   not support quick tunnels while one exists; portlift warns you if it finds
   one.
 
+## License
+
+[Apache 2.0](LICENSE). portlift runs [cloudflared][cloudflared], which is
+Cloudflare's own software under its own license, and is not affiliated with
+Cloudflare.
+
+[cloudflared]: https://github.com/cloudflare/cloudflared
 [quick]: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/
