@@ -38,7 +38,8 @@ type Tunnel struct {
 }
 
 // Start runs cloudflared against origin and returns once the public URL is
-// live. insecure skips certificate checks on an https origin.
+// live and its hostname resolves. insecure skips certificate checks on an
+// https origin.
 func Start(ctx context.Context, bin, origin string, insecure bool) (*Tunnel, error) {
 	args := []string{"tunnel", "--no-autoupdate", "--url", origin}
 	if insecure {
@@ -100,6 +101,17 @@ func Start(ctx context.Context, bin, origin string, insecure bool) (*Tunnel, err
 	case <-t.done:
 		return nil, t.failure("cloudflared exited before the tunnel was ready")
 	case <-ctx.Done():
+		t.Stop()
+		return nil, ctx.Err()
+	}
+
+	awaitDNS(ctx, strings.TrimPrefix(t.URL, "https://"), t.done)
+	select {
+	case <-t.done:
+		return nil, t.failure("cloudflared exited before the tunnel was ready")
+	default:
+	}
+	if ctx.Err() != nil {
 		t.Stop()
 		return nil, ctx.Err()
 	}

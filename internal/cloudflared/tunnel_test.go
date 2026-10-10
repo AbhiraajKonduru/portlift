@@ -2,9 +2,11 @@ package cloudflared
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -32,14 +34,49 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
+// fakeDNS replaces the hostname check with one that says a name does not
+// exist until it has been asked `misses` times, and returns a function
+// reporting the names it was asked about.
+func fakeDNS(t *testing.T, misses int) func() []string {
+	t.Helper()
+	var mu sync.Mutex
+	var asked []string
+	swapLookup(t, func(context.Context) (lookupFunc, error) {
+		return func(_ context.Context, host string) (bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			asked = append(asked, host)
+			return len(asked) > misses, nil
+		}, nil
+	})
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), asked...)
+	}
+}
+
+func swapLookup(t *testing.T, fn func(context.Context) (lookupFunc, error)) {
+	t.Helper()
+	old := newLookup
+	newLookup = fn
+	t.Cleanup(func() { newLookup = old })
+}
+
 func TestStartReturnsURLAndStops(t *testing.T) {
 	t.Setenv(fakeEnv, "ok")
+	asked := fakeDNS(t, 2)
 	tunnel, err := Start(context.Background(), os.Args[0], "https://127.0.0.1:8443", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := "https://calm-river-demo.trycloudflare.com"; tunnel.URL != want {
 		t.Errorf("URL = %q, want %q", tunnel.URL, want)
+	}
+	// Start must hold the URL back until the hostname resolves: two misses,
+	// then the lookup that succeeds.
+	if got := asked(); len(got) != 3 || got[0] != "calm-river-demo.trycloudflare.com" {
+		t.Errorf("hostname lookups = %q, want 3 for calm-river-demo.trycloudflare.com", got)
 	}
 
 	stopped := make(chan struct{})
@@ -56,6 +93,29 @@ func TestStartReturnsURLAndStops(t *testing.T) {
 	}
 	if log := tunnel.Err().Error(); !strings.Contains(log, "args: tunnel --no-autoupdate --url https://127.0.0.1:8443 --no-tls-verify") {
 		t.Errorf("cloudflared was not run with the expected arguments; log:\n%s", log)
+	}
+}
+
+func TestStartFallsBackWhenDNSCheckCannotRun(t *testing.T) {
+	failing := func(context.Context, string) (bool, error) { return false, errors.New("blocked") }
+	setups := map[string]func(context.Context) (lookupFunc, error){
+		"nameservers unknown": func(context.Context) (lookupFunc, error) { return nil, errors.New("blocked") },
+		"every lookup fails":  func(context.Context) (lookupFunc, error) { return failing, nil },
+	}
+	for name, setup := range setups {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(fakeEnv, "ok")
+			swapLookup(t, setup)
+			began := time.Now()
+			tunnel, err := Start(context.Background(), os.Args[0], "http://127.0.0.1:3000", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tunnel.Stop()
+			if took := time.Since(began); took < dnsFallback || took > dnsWait/2 {
+				t.Errorf("Start took %s; want the %s fallback pause and no more", took, dnsFallback)
+			}
+		})
 	}
 }
 
