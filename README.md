@@ -85,7 +85,8 @@ using it.
   Server-Sent Events, so a streaming endpoint may hang through the tunnel.
 - **Some dev servers block unknown hosts.** portlift checks for this on startup
   and prints the setting to change for Vite, webpack-dev-server, Rails and
-  Django.
+  Django. Next.js serves the page but refuses hot reload; portlift checks for
+  that too and points you at `allowedDevOrigins`.
 - **An existing `~/.cloudflared/config.yml` gets in the way.** Cloudflare does
   not support quick tunnels while one exists; portlift warns you if it finds
   one.

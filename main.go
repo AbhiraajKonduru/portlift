@@ -131,9 +131,16 @@ func serve(ctx context.Context, opts options, interactive bool) error {
 		}
 		fmt.Fprint(os.Stderr, "connecting…")
 	}
-	blocked := make(chan *detect.Block, 1)
+	type preflight struct {
+		block  *detect.Block
+		nextJS bool
+	}
+	checked := make(chan preflight, 1)
 	if interactive {
-		go func() { blocked <- detect.HostBlock(ctx, origin) }()
+		go func() {
+			block, nextJS := detect.HostBlock(ctx, origin)
+			checked <- preflight{block, nextJS}
+		}()
 	}
 
 	tunnel, err := cloudflared.Start(ctx, bin, origin, strings.HasPrefix(origin, "https://"))
@@ -155,8 +162,12 @@ func serve(ctx context.Context, opts options, interactive bool) error {
 		}
 	}
 
-	if b := <-blocked; b != nil {
-		fmt.Fprintf(os.Stderr, "warning: %s is rejecting requests that come through the tunnel.\n  To fix it, %s\n", b.Server, b.Fix)
+	pre := <-checked
+	if pre.block == nil && pre.nextJS {
+		pre.block = detect.NextDevBlock(ctx, origin, tunnel.URL)
+	}
+	if pre.block != nil {
+		fmt.Fprintf(os.Stderr, "warning: %s.\n  To fix it, %s\n", pre.block.Problem, pre.block.Fix)
 	}
 
 	// Raw mode delivers single key presses, at the cost of Ctrl+C arriving as

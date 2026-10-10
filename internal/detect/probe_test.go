@@ -218,16 +218,94 @@ func TestHostBlock(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			got := ""
-			if b := HostBlock(context.Background(), srv.URL); b != nil {
-				got = b.Server
+			b, nextJS := HostBlock(context.Background(), srv.URL)
+			switch {
+			case tt.want == "" && b != nil:
+				t.Errorf("HostBlock reported %q, want nothing", b.Problem)
+			case tt.want != "" && (b == nil || !strings.HasPrefix(b.Problem, tt.want+" ")):
+				t.Errorf("HostBlock = %+v, want a problem with %s", b, tt.want)
 			}
-			if got != tt.want {
-				t.Errorf("HostBlock reported %q, want %q", got, tt.want)
+			if nextJS {
+				t.Error("a server without the Next.js header was reported as Next.js")
 			}
 			if !strings.HasSuffix(host, ".trycloudflare.com") {
 				t.Errorf("request Host was %q, want a trycloudflare.com name", host)
 			}
 		})
+	}
+}
+
+// nextServer behaves like `next dev` as far as these checks go: it names
+// itself in a header, and it refuses anything under /_next to a request whose
+// Origin is not localhost or one of allowed.
+func nextServer(t *testing.T, allowed ...string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Powered-By", "Next.js")
+		if !strings.HasPrefix(r.URL.Path, "/_next") {
+			fmt.Fprint(w, "<html>app</html>")
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" {
+			u, _ := url.Parse(origin)
+			ok := u.Hostname() == "localhost"
+			for _, suffix := range allowed {
+				ok = ok || strings.HasSuffix(u.Hostname(), suffix)
+			}
+			if !ok {
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, "Unauthorized")
+				return
+			}
+		}
+		http.Error(w, "Not Found", http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestHostBlockRecognisesNextJS(t *testing.T) {
+	block, nextJS := HostBlock(context.Background(), nextServer(t).URL)
+	if block != nil || !nextJS {
+		t.Errorf("HostBlock = %+v, nextJS %v; want no block and nextJS true", block, nextJS)
+	}
+}
+
+func TestNextDevBlock(t *testing.T) {
+	const public = "https://calm-river-demo.trycloudflare.com"
+
+	if b := NextDevBlock(context.Background(), nextServer(t).URL, public); b == nil {
+		t.Error("a Next.js server with no allowed origins was not reported")
+	} else if !strings.Contains(b.Fix, "allowedDevOrigins") {
+		t.Errorf("fix does not name the setting: %q", b.Fix)
+	}
+
+	if b := NextDevBlock(context.Background(), nextServer(t, ".trycloudflare.com").URL, public); b != nil {
+		t.Errorf("a Next.js server that allows the tunnel was reported: %q", b.Problem)
+	}
+
+	// A server that is not Next.js answers 404 or 403 in its own words.
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+	}))
+	defer other.Close()
+	if b := NextDevBlock(context.Background(), other.URL, public); b != nil {
+		t.Errorf("an unrelated 403 was reported as a Next.js block: %q", b.Problem)
+	}
+}
+
+func TestNextDevBlockSendsTheRealHostname(t *testing.T) {
+	var origin, host, path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin, host, path = r.Header.Get("Origin"), r.Host, r.URL.Path
+	}))
+	defer srv.Close()
+
+	NextDevBlock(context.Background(), srv.URL, "https://calm-river-demo.trycloudflare.com")
+	if origin != "https://calm-river-demo.trycloudflare.com" || host != "calm-river-demo.trycloudflare.com" {
+		t.Errorf("sent Origin %q and Host %q, want the tunnel's own", origin, host)
+	}
+	if !strings.HasPrefix(path, "/_next/static/") {
+		t.Errorf("asked for %q, want a path Next.js answers without compiling", path)
 	}
 }
