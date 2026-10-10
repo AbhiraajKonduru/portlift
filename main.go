@@ -22,8 +22,6 @@ import (
 	"github.com/AbhiraajKonduru/portlift/internal/detect"
 )
 
-var version = "dev"
-
 const usage = `portlift puts a local server on a public URL.
 
 Usage:
@@ -94,7 +92,7 @@ func run(args []string) int {
 		return 0
 	}
 	if opts.version {
-		fmt.Println("portlift", version)
+		fmt.Println("portlift", currentVersion())
 		return 0
 	}
 
